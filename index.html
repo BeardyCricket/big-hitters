@@ -105,6 +105,7 @@ html,body{background:var(--bg);font-family:-apple-system,'SF Pro Text','Helvetic
 .bf-row{display:flex;gap:8px;padding:6px 16px}
 .bf-chip{flex:1;text-align:center;padding:10px 8px;border-radius:var(--rs);background:var(--card);border:1.5px solid var(--border);cursor:default}
 .bf-chip.facing{background:var(--green-l);border-color:var(--green)}
+.bf-chip.bf-warn{border-color:var(--orange);background:var(--orange-l)}
 .bf-num{font-size:22px;font-weight:800}
 .bf-name{font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bf-tag{font-size:10px;font-weight:700;color:var(--green);margin-top:2px}
@@ -445,6 +446,12 @@ html,body{background:var(--bg);font-family:-apple-system,'SF Pro Text','Helvetic
 const PAIR_NAMES   = ['Superchargers','Thunderbolts','Sixers','Rockets','Renegades','Mavericks','Team G'];
 const PAIR_COLORS  = ['#7c3aed','#ca8a04','#6b7280','#dc2626','#16a34a','#2563eb','#a16207'];
 const PAIR_LETTERS = ['A','B','C','D','E','F','G'];
+// Group 0 = Superchargers/Thunderbolts/Sixers (brand), 1 = Rockets (red), 2 = Renegades/Mavericks (green)
+function pairGroupStyle(pairIdx) {
+  if (pairIdx <= 2) return {bg:'var(--brand-l)', border:'var(--brand)', text:'var(--brand)'};
+  if (pairIdx === 3) return {bg:'var(--red-l)',   border:'var(--red)',   text:'var(--red)'};
+  return                    {bg:'var(--green-l)', border:'var(--green)', text:'var(--green)'};
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // GLOBAL STATE
@@ -457,15 +464,23 @@ let G = {
   underarmAtEnd: false,  // unrebowled wides/NBs bowled underarm at end
 
   // Players & Pairs
-  players: Array.from({length: 12}, () => ({ name: '' })),  // [{name}] — kept in sync as user types
+  players: [                                  // [{name}] — kept in sync as user types
+    {name:'Josh'},{name:'Krish'},             // Superchargers
+    {name:'Rory'},{name:'Reyaan'},            // Thunderbolts
+    {name:'Aadarsh'},{name:'Aadhaven'},       // Sixers
+    {name:'Zavi'},{name:'Edward'},            // Rockets
+    {name:'Ethan'},{name:'Emily'},            // Renegades
+    {name:'Jasmine'},{name:'Tia'},            // Mavericks
+  ],
   pairs: [],    // [{id, name, p1, p2, overs}]  overs=null means use default
 
-  // Fixtures
-  fixtures: [],      // [{battingId, bowlingId}]
+  // Fixtures — each may have its own overs count for split-bowling innings
+  fixtures: [],        // [{battingId, bowlingId, overs}]
   currentFixture: 0,
+  _fixtureKey: null,   // tracks which pair config the fixtures were generated for
 
-  // Final pair results
-  pairResults: {},  // {id: {runs, wickets, bf, done}}
+  // Final pair results (accumulated across multi-stint batting)
+  pairResults: {},  // {id: {runs, wickets, bf, battingRuns:{name:runs}, done}}
 
   // Overs bowled per player (across all innings)
   bowlerOvers: {},  // {playerName: completedOvers}
@@ -647,16 +662,37 @@ function pairOpts(selected) {
 }
 
 function goToFixtures() {
-  if (G.fixtures.length !== G.pairs.length) {
-    // Pair count changed — rebuild fixtures, carrying over any saved selections by position
-    const old = G.fixtures.slice();
-    G.fixtures = G.pairs.map((p, i) => ({
-      battingId: old[i]?.battingId ?? p.id,
-      bowlingId: old[i]?.bowlingId ?? G.pairs[(i + 1) % G.pairs.length].id,
-    }));
+  const key = G.pairs.map(p => p.id).join(',');
+  if (G._fixtureKey !== key) {
+    G._fixtureKey = key;
+    // Generate default fixtures
+    if (G.pairs.length === 6 && G.defaultOvers === 3) {
+      // Tournament schedule: split bowling across pairs
+      // IDs: 0=Superchargers,1=Thunderbolts,2=Sixers,3=Rockets,4=Renegades,5=Mavericks
+      const [A,B,C,D,E,F] = G.pairs.map(p => p.id);
+      G.fixtures = [
+        {battingId:A, bowlingId:B, overs:2},
+        {battingId:A, bowlingId:D, overs:1},
+        {battingId:C, bowlingId:D, overs:1},
+        {battingId:C, bowlingId:A, overs:2},
+        {battingId:D, bowlingId:C, overs:2},
+        {battingId:D, bowlingId:B, overs:1},
+        {battingId:E, bowlingId:B, overs:1},
+        {battingId:E, bowlingId:F, overs:2},
+        {battingId:F, bowlingId:E, overs:2},
+        {battingId:F, bowlingId:A, overs:1},
+        {battingId:B, bowlingId:A, overs:1},
+        {battingId:B, bowlingId:C, overs:2},
+      ];
+    } else {
+      // Simple: one fixture per batting pair
+      G.fixtures = G.pairs.map((p, i) => ({
+        battingId: p.id,
+        bowlingId: G.pairs[(i + 1) % G.pairs.length].id,
+        overs: null,
+      }));
+    }
   }
-  // Otherwise keep existing fixture selections exactly as the user set them
-
   renderFixtures();
   showScreen('s-fixtures');
 }
@@ -665,19 +701,26 @@ function renderFixtures() {
   const list = document.getElementById('fixtures-list');
   list.innerHTML = '';
   G.fixtures.forEach((fix, idx) => {
+    const batIdx  = G.pairs.findIndex(p => p.id === fix.battingId);
+    const grp     = pairGroupStyle(batIdx);
     const div = document.createElement('div');
-    div.className = 'fix-row';
+    div.style.cssText = `padding:8px 10px;border-radius:var(--rs);border-left:4px solid ${grp.border};background:${grp.bg};margin-bottom:6px`;
     div.innerHTML = `
-      <div style="display:flex;align-items:center;gap:10px">
-        <div style="font-size:13px;font-weight:700;color:var(--muted);width:28px;flex-shrink:0">Inn ${idx+1}</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="font-size:12px;font-weight:700;color:${grp.text};width:28px;flex-shrink:0">#${idx+1}</div>
         <div style="flex:1">
-          <div style="font-size:11px;color:var(--muted);font-weight:700;margin-bottom:3px">BATTING</div>
-          <select class="sel" onchange="G.fixtures[${idx}].battingId=parseInt(this.value)">${pairOpts(fix.battingId)}</select>
+          <div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:2px">BATTING</div>
+          <select class="sel" style="font-size:13px;padding:6px 6px" onchange="G.fixtures[${idx}].battingId=parseInt(this.value)">${pairOpts(fix.battingId)}</select>
         </div>
-        <div style="color:var(--muted);font-weight:700;flex-shrink:0">vs</div>
+        <div style="color:var(--muted);font-weight:700;font-size:13px;flex-shrink:0">vs</div>
         <div style="flex:1">
-          <div style="font-size:11px;color:var(--muted);font-weight:700;margin-bottom:3px">BOWLING</div>
-          <select class="sel" onchange="G.fixtures[${idx}].bowlingId=parseInt(this.value)">${pairOpts(fix.bowlingId)}</select>
+          <div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:2px">BOWLING</div>
+          <select class="sel" style="font-size:13px;padding:6px 6px" onchange="G.fixtures[${idx}].bowlingId=parseInt(this.value)">${pairOpts(fix.bowlingId)}</select>
+        </div>
+        <div style="flex-shrink:0;text-align:center">
+          <div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:2px">OV</div>
+          <input type="number" min="1" max="20" style="width:42px;padding:6px 4px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;text-align:center;background:var(--card)"
+            value="${fix.overs ?? G.defaultOvers}" onchange="G.fixtures[${idx}].overs=parseInt(this.value)||G.defaultOvers">
         </div>
       </div>
     `;
@@ -692,7 +735,7 @@ function startGame() {
   // Snapshot fixture selects (already bound via onchange)
   G.pairResults = {};
   G.pairs.forEach(p => {
-    G.pairResults[p.id] = { runs: 0, wickets: 0, bf: { p1: 0, p2: 0 }, done: false };
+    G.pairResults[p.id] = { runs: 0, wickets: 0, bf: { p1: 0, p2: 0 }, battingRuns: {}, done: false };
   });
   G.bowlerOvers = {};
   G.currentFixture = 0;
@@ -705,20 +748,21 @@ function beginInnings(fixIdx) {
   const fix = G.fixtures[fixIdx];
   const bp = pairById(fix.battingId);
   const bowlP = pairById(fix.bowlingId);
-  const totalOvers = bp.overs || G.defaultOvers;
+  const totalOvers = fix.overs ?? bp.overs ?? G.defaultOvers;
 
   G.cur = {
     battingPairId:  fix.battingId,
     bowlingPairId:  fix.bowlingId,
     totalOvers,
-    over:           0,   // overs completed
-    ballsThisOver:  0,   // legitimate balls in current over
-    facingIdx:      0,   // 0 = p1, 1 = p2
+    over:           0,
+    ballsThisOver:  0,
+    facingIdx:      0,
     bowler:         bowlP.p1,
     runs:           0,
     wickets:        0,
-    bf:             { p1: 0, p2: 0 },  // balls faced this innings
-    overBalls:      [],  // dots for current over
+    bf:             { p1: 0, p2: 0 },   // balls faced this stint
+    runsScored:     { p1: 0, p2: 0 },   // bat-runs per player this stint
+    overBalls:      [],
     pendingUnderarms: 0,
     isUnderarmPhase: false,
     underarmsLeft:  0,
@@ -769,6 +813,7 @@ function renderScoringUI() {
   renderBallRow();
   renderBatterChips();
   syncFacingDropdown();
+  updateBowlerBtn();
   renderTotals();
   renderBowlingOvers();
 }
@@ -795,21 +840,28 @@ function renderBallRow() {
 }
 
 function renderBatterChips() {
-  const bp  = getBattingPair();
-  const cur = G.cur;
-  const f   = document.getElementById('bf-row');
-  f.innerHTML = `
-    <div class="bf-chip ${cur.facingIdx === 0 ? 'facing' : ''}">
-      <div class="bf-num">${cur.bf.p1}</div>
-      <div class="bf-name">${bp.p1}</div>
-      <div class="bf-tag">${cur.facingIdx === 0 ? '▶ STRIKER' : ''}</div>
-    </div>
-    <div class="bf-chip ${cur.facingIdx === 1 ? 'facing' : ''}">
-      <div class="bf-num">${cur.bf.p2}</div>
-      <div class="bf-name">${bp.p2}</div>
-      <div class="bf-tag">${cur.facingIdx === 1 ? '▶ STRIKER' : ''}</div>
-    </div>
-  `;
+  const bp   = getBattingPair();
+  const cur  = G.cur;
+  const prev = G.pairResults[bp.id] || {};
+  // Cumulative balls faced (previous stints + current)
+  const tot1 = (prev.bf?.p1 || 0) + cur.bf.p1;
+  const tot2 = (prev.bf?.p2 || 0) + cur.bf.p2;
+  const f = document.getElementById('bf-row');
+  function chip(idx, name, tot, bf) {
+    const isFacing  = cur.facingIdx === idx;
+    const overLimit = tot > 6;
+    let cls = 'bf-chip';
+    if (isFacing) cls += ' facing';
+    if (overLimit) cls += ' bf-warn';
+    const warnNote = overLimit ? `<div style="font-size:10px;font-weight:700;color:var(--orange)">⚠ ${tot} balls</div>` : '';
+    return `<div class="${cls}">
+      <div class="bf-num">${bf}</div>
+      <div class="bf-name">${name}</div>
+      <div class="bf-tag">${isFacing ? '▶ STRIKER' : ''}</div>
+      ${warnNote}
+    </div>`;
+  }
+  f.innerHTML = chip(0, bp.p1, tot1, cur.bf.p1) + chip(1, bp.p2, tot2, cur.bf.p2);
 }
 
 function populateFacingDropdown() {
@@ -907,15 +959,21 @@ function renderTotals() {
   G.pairs.forEach((pair, idx) => {
     const isBatting = pair.id === G.cur.battingPairId;
     const res = G.pairResults[pair.id];
+    const hasBatted = res.runs > 0 || res.wickets > 0;
     let runs, wickets, bfp1, bfp2;
     if (isBatting) {
-      runs = G.cur.runs; wickets = G.cur.wickets;
-      bfp1 = G.cur.bf.p1; bfp2 = G.cur.bf.p2;
+      // Accumulated previous stints + current stint
+      runs    = res.runs + G.cur.runs;
+      wickets = res.wickets + G.cur.wickets;
+      bfp1    = res.bf.p1 + G.cur.bf.p1;
+      bfp2    = res.bf.p2 + G.cur.bf.p2;
+    } else if (res.done || hasBatted) {
+      runs = res.runs; wickets = res.wickets;
+      bfp1 = res.bf.p1; bfp2 = res.bf.p2;
     } else {
-      runs = res.done ? res.runs : '–';
-      wickets = res.done ? res.wickets : '';
-      bfp1 = res.done ? res.bf.p1 : ''; bfp2 = res.done ? res.bf.p2 : '';
+      runs = '–'; wickets = ''; bfp1 = ''; bfp2 = '';
     }
+    const moreToBat = !res.done && !isBatting && G.fixtures.slice(G.currentFixture + 1).some(f => f.battingId === pair.id);
     const col = PAIR_COLORS[idx % PAIR_COLORS.length];
     const row = document.createElement('div');
     row.className = 'tot-row' + (isBatting ? ' bat-now' : '');
@@ -926,10 +984,11 @@ function renderTotals() {
         <span style="font-size:11px;color:var(--muted);font-weight:400">${pair.p1} &amp; ${pair.p2}</span>
         ${res.done && !isBatting ? '<span class="badge badge-green" style="margin-left:4px">Done</span>' : ''}
         ${isBatting ? '<span class="badge badge-orange" style="margin-left:4px">Batting</span>' : ''}
+        ${moreToBat && hasBatted ? '<span class="badge badge-blue" style="margin-left:4px">More to bat</span>' : ''}
       </div>
       <div>
         <div class="tot-score">${runs}${typeof wickets === 'number' ? '-'+wickets : ''}</div>
-        ${res.done || isBatting ? `<div style="font-size:10px;color:var(--muted);text-align:right">${pair.p1}: ${bfp1}b · ${pair.p2}: ${bfp2}b</div>` : ''}
+        ${(res.done || isBatting || hasBatted) && bfp1 !== '' ? `<div style="font-size:10px;color:var(--muted);text-align:right">${pair.p1}: ${bfp1}b · ${pair.p2}: ${bfp2}b</div>` : ''}
       </div>
     `;
     panel.appendChild(row);
@@ -965,6 +1024,7 @@ function scoreRun(runs) {
   cur.runs += runs;
   const bfKey = cur.facingIdx === 0 ? 'p1' : 'p2';
   cur.bf[bfKey]++;
+  cur.runsScored[bfKey] += runs;
 
   const dotClass = runs === 0 ? '0' : runs === 4 ? '4' : runs === 6 ? '6' : 'r';
   cur.overBalls.push({ type: 'run', runs, label: runs === 0 ? '•' : String(runs), dotClass, counts: true });
@@ -1108,7 +1168,13 @@ function checkOverEnd() {
     cur.over++;
     cur.ballsThisOver = 0;
     cur.overBalls = [];
-    swapStrike();  // end of over: swap ends
+    swapStrike();  // end of over: swap batting ends
+
+    // Auto-switch to the other player in the bowling pair
+    if (!cur.isUnderarmPhase) {
+      const bowlP = getBowlingPair();
+      if (bowlP) cur.bowler = cur.bowler === bowlP.p1 ? bowlP.p2 : bowlP.p1;
+    }
 
     if (cur.over >= cur.totalOvers) {
       renderScoringUI();
@@ -1173,13 +1239,22 @@ function confirmEnd() {
 
 function finalizeInnings() {
   const cur = G.cur;
-  G.pairResults[cur.battingPairId] = {
-    runs:    cur.runs,
-    wickets: cur.wickets,
-    bf:      { ...cur.bf },
-    done:    true,
-  };
+  const bp  = getBattingPair();
+  const res = G.pairResults[cur.battingPairId];
+
+  // Accumulate this stint into the pair's running total
+  res.runs    += cur.runs;
+  res.wickets += cur.wickets;
+  res.bf.p1   += cur.bf.p1;
+  res.bf.p2   += cur.bf.p2;
+  res.battingRuns[bp.p1] = (res.battingRuns[bp.p1] || 0) + cur.runsScored.p1;
+  res.battingRuns[bp.p2] = (res.battingRuns[bp.p2] || 0) + cur.runsScored.p2;
+
+  // Mark done only when no further fixtures for this batting pair
   const nextIdx = G.currentFixture + 1;
+  const hasMore = G.fixtures.slice(nextIdx).some(f => f.battingId === cur.battingPairId);
+  res.done = !hasMore;
+
   if (nextIdx < G.fixtures.length) {
     beginInnings(nextIdx);
   } else {
@@ -1191,18 +1266,15 @@ function finalizeInnings() {
 // LEADERBOARD
 // ──────────────────────────────────────────────────────────────────────────────
 function showLeaderboard() {
-  // Collect results including current if needed
   const ranked = G.pairs.map(pair => {
-    const res = G.pairResults[pair.id];
-    let runs, wickets, bf;
-    if (res && res.done) {
-      runs = res.runs; wickets = res.wickets; bf = res.bf;
-    } else if (G.cur && pair.id === G.cur.battingPairId) {
-      runs = G.cur.runs; wickets = G.cur.wickets; bf = G.cur.bf;
-    } else {
-      runs = 0; wickets = 0; bf = { p1: 0, p2: 0 };
-    }
-    return { pair, runs, wickets, bf };
+    const res = G.pairResults[pair.id] || {};
+    return {
+      pair,
+      runs:         res.runs    || 0,
+      wickets:      res.wickets || 0,
+      bf:           res.bf      || {p1:0, p2:0},
+      battingRuns:  res.battingRuns || {},
+    };
   }).sort((a, b) => b.runs - a.runs || a.wickets - b.wickets);
 
   const list = document.getElementById('lb-list');
@@ -1216,12 +1288,20 @@ function showLeaderboard() {
     row.className = 'lb-row';
     row.style.background = bgs[idx] || '#fff';
     row.style.border = `1px solid var(--border)`;
+    const p1Runs = r.battingRuns[r.pair.p1] || 0;
+    const p2Runs = r.battingRuns[r.pair.p2] || 0;
     row.innerHTML = `
       <div class="lb-rank">${idx < 3 ? medals[idx] : idx + 1}</div>
       <div class="lb-info">
         <div class="lb-name" style="color:${col}">${r.pair.name}</div>
-        <div class="lb-players">${r.pair.p1} &amp; ${r.pair.p2}</div>
-        <div class="lb-bf">${r.pair.p1}: ${r.bf.p1} balls &nbsp;|&nbsp; ${r.pair.p2}: ${r.bf.p2} balls</div>
+        <div style="font-size:13px;margin-top:3px">
+          <span style="font-weight:700">${r.pair.p1}</span>
+          <span style="color:var(--muted);margin-left:4px">${p1Runs} runs · ${r.bf.p1} balls</span>
+        </div>
+        <div style="font-size:13px;margin-top:1px">
+          <span style="font-weight:700">${r.pair.p2}</span>
+          <span style="color:var(--muted);margin-left:4px">${p2Runs} runs · ${r.bf.p2} balls</span>
+        </div>
       </div>
       <div class="lb-score" style="color:${col}">
         ${r.runs}<span style="font-size:15px;font-weight:600;color:var(--muted)">-${r.wickets}</span>
