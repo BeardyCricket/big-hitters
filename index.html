@@ -349,6 +349,9 @@ html,body{background:var(--bg);font-family:-apple-system,'SF Pro Text','Helvetic
   <!-- running totals -->
   <div class="tot-panel" id="tot-panel"></div>
 
+  <!-- bowling overs tracker -->
+  <div style="padding:0 16px 8px" id="bowl-overs-panel"></div>
+
   <!-- end innings -->
   <div style="padding:4px 16px 0">
     <button class="btn btn-secondary" onclick="endInningsManual()">End Innings Early</button>
@@ -439,7 +442,8 @@ html,body{background:var(--bg);font-family:-apple-system,'SF Pro Text','Helvetic
 // ──────────────────────────────────────────────────────────────────────────────
 // CONSTANTS
 // ──────────────────────────────────────────────────────────────────────────────
-const PAIR_COLORS = ['#7c3aed','#2563eb','#16a34a','#ea580c','#db2777','#0891b2','#a16207'];
+const PAIR_NAMES   = ['Superchargers','Thunderbolts','Sixers','Rockets','Renegades','Mavericks','Team G'];
+const PAIR_COLORS  = ['#7c3aed','#ca8a04','#6b7280','#dc2626','#16a34a','#2563eb','#a16207'];
 const PAIR_LETTERS = ['A','B','C','D','E','F','G'];
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -462,6 +466,9 @@ let G = {
 
   // Final pair results
   pairResults: {},  // {id: {runs, wickets, bf, done}}
+
+  // Overs bowled per player (across all innings)
+  bowlerOvers: {},  // {playerName: completedOvers}
 
   // Current innings live state
   cur: null,
@@ -574,7 +581,7 @@ function goToPairs() {
     for (let i = 0; i < numPairs; i++) {
       G.pairs.push({
         id: i,
-        name:  old[i]?.name  ?? `Pair ${PAIR_LETTERS[i]}`,
+        name:  old[i]?.name  ?? PAIR_NAMES[i] ?? `Pair ${PAIR_LETTERS[i]}`,
         p1:    old[i]?.p1    ?? G.players[i * 2]?.name   ?? '',
         p2:    old[i]?.p2    ?? G.players[i * 2 + 1]?.name ?? '',
         overs: old[i]?.overs ?? null,
@@ -687,6 +694,7 @@ function startGame() {
   G.pairs.forEach(p => {
     G.pairResults[p.id] = { runs: 0, wickets: 0, bf: { p1: 0, p2: 0 }, done: false };
   });
+  G.bowlerOvers = {};
   G.currentFixture = 0;
   G.history = [];
   beginInnings(0);
@@ -762,6 +770,7 @@ function renderScoringUI() {
   renderBatterChips();
   syncFacingDropdown();
   renderTotals();
+  renderBowlingOvers();
 }
 
 function renderBallRow() {
@@ -852,7 +861,9 @@ function openBowlerSheet() {
       const isSelected = name === G.cur.bowler;
       const btn = document.createElement('button');
       btn.style.cssText = `width:100%;text-align:left;padding:11px 12px;border-radius:var(--rs);border:1.5px solid ${isSelected ? col : 'var(--border)'};background:${isSelected ? col + '18' : 'var(--card)'};font-size:15px;font-weight:${isSelected ? '700' : '500'};cursor:pointer;margin-bottom:6px;display:flex;align-items:center;gap:10px;font-family:inherit`;
-      btn.innerHTML = `<div style="width:10px;height:10px;border-radius:50%;background:${col};flex-shrink:0"></div><span style="flex:1">${name}</span>${isSelected ? `<span style="color:${col};font-size:16px">✓</span>` : ''}`;
+      const ovs = G.bowlerOvers[name] || 0;
+      const ovBadge = `<span style="font-size:12px;font-weight:700;padding:2px 8px;border-radius:10px;background:${ovs > 0 ? col+'22' : 'var(--bg)'};color:${ovs > 0 ? col : 'var(--muted)'};border:1px solid ${ovs > 0 ? col : 'var(--border)'}">${ovs} ov</span>`;
+      btn.innerHTML = `<div style="width:10px;height:10px;border-radius:50%;background:${col};flex-shrink:0"></div><span style="flex:1">${name}</span>${ovBadge}${isSelected ? `<span style="color:${col};font-size:16px;margin-left:6px">✓</span>` : ''}`;
       btn.onclick = () => selectBowler(name);
       list.appendChild(btn);
     });
@@ -925,11 +936,30 @@ function renderTotals() {
   });
 }
 
+function renderBowlingOvers() {
+  const panel = document.getElementById('bowl-overs-panel');
+  panel.innerHTML = `<div class="card-title" style="padding:4px 0 6px">Bowling Overs</div>`;
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px';
+  G.pairs.forEach((pair, idx) => {
+    const col = PAIR_COLORS[idx % PAIR_COLORS.length];
+    [pair.p1, pair.p2].filter(Boolean).forEach(name => {
+      const ovs = G.bowlerOvers[name] || 0;
+      const chip = document.createElement('div');
+      const isBowling = name === G.cur.bowler;
+      chip.style.cssText = `display:flex;align-items:center;gap:5px;padding:5px 9px;border-radius:20px;font-size:12px;font-weight:600;border:1.5px solid ${isBowling ? col : 'var(--border)'};background:${isBowling ? col+'18' : 'var(--card)'};color:var(--text)`;
+      chip.innerHTML = `<div style="width:8px;height:8px;border-radius:50%;background:${col};flex-shrink:0"></div>${name}<span style="margin-left:3px;font-weight:800;color:${ovs > 0 ? col : 'var(--muted)'}">${ovs}ov</span>`;
+      grid.appendChild(chip);
+    });
+  });
+  panel.appendChild(grid);
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // SCORING ACTIONS
 // ──────────────────────────────────────────────────────────────────────────────
 function scoreRun(runs) {
-  G.history.push(snapshotCur());
+  G.history.push({ cur: snapshotCur(), bowlerOvers: {...G.bowlerOvers} });
   const cur = G.cur;
 
   cur.runs += runs;
@@ -975,7 +1005,7 @@ function extraDecision(rebowl) {
   document.getElementById('modal-extra').classList.add('hidden');
   if (!pendingExtra) return;
 
-  G.history.push(snapshotCur());
+  G.history.push({ cur: snapshotCur(), bowlerOvers: {...G.bowlerOvers} });
   const cur = G.cur;
   const type = pendingExtra.type;
   pendingExtra = null;
@@ -1006,7 +1036,7 @@ function byePick(runs) {
   document.getElementById('modal-bye').classList.add('hidden');
   if (!pendingBye) return;
 
-  G.history.push(snapshotCur());
+  G.history.push({ cur: snapshotCur(), bowlerOvers: {...G.bowlerOvers} });
   const cur = G.cur;
   const type = pendingBye.type;
   pendingBye = null;
@@ -1037,7 +1067,7 @@ function openWktModal() {
 
 function selectDismissal(how) {
   document.getElementById('modal-wkt').classList.add('hidden');
-  G.history.push(snapshotCur());
+  G.history.push({ cur: snapshotCur(), bowlerOvers: {...G.bowlerOvers} });
   const cur = G.cur;
 
   cur.wickets++;
@@ -1057,9 +1087,12 @@ function selectDismissal(how) {
 
 function undoLast() {
   if (!G.history.length) return;
-  G.cur = G.history.pop();
+  const snap = G.history.pop();
+  G.cur = snap.cur;
+  G.bowlerOvers = snap.bowlerOvers;
   renderScoringUI();
   syncFacingDropdown();
+  updateBowlerBtn();
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1068,6 +1101,10 @@ function undoLast() {
 function checkOverEnd() {
   const cur = G.cur;
   if (cur.ballsThisOver >= 6) {
+    // Credit the bowler with one completed over (not during underarm phase)
+    if (!cur.isUnderarmPhase && cur.bowler) {
+      G.bowlerOvers[cur.bowler] = (G.bowlerOvers[cur.bowler] || 0) + 1;
+    }
     cur.over++;
     cur.ballsThisOver = 0;
     cur.overBalls = [];
