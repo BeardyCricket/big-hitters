@@ -242,6 +242,15 @@ html,body{background:var(--bg);font-family:-apple-system,'SF Pro Text','Helvetic
     </div>
 
     <div class="card">
+      <div class="card-title">Wickets</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:10px">Runs deducted from batting total when a wicket falls.</div>
+      <div class="chips-2">
+        <button class="chip-sel active" id="wkt-btn-0" onclick="setWicketPenalty(0)">0 runs<br><span style="font-size:11px;font-weight:400">No penalty</span></button>
+        <button class="chip-sel" id="wkt-btn-5" onclick="setWicketPenalty(5)">−5 runs<br><span style="font-size:11px;font-weight:400">Per wicket lost</span></button>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="card-title">Rules</div>
       <div class="tog-row">
         <div>
@@ -461,6 +470,7 @@ let G = {
   numPlayers: 12,
   defaultOvers: 2,
   extraRuns: 0,          // runs awarded for wide/NB
+  wicketPenalty: 0,      // runs deducted per wicket (0 or 5)
   underarmAtEnd: false,  // unrebowled wides/NBs bowled underarm at end
 
   // Players & Pairs
@@ -564,6 +574,12 @@ function setExtraRuns(v) {
   G.extraRuns = v;
   document.getElementById('extra-btn-0').classList.toggle('active', v === 0);
   document.getElementById('extra-btn-2').classList.toggle('active', v === 2);
+}
+
+function setWicketPenalty(v) {
+  G.wicketPenalty = v;
+  document.getElementById('wkt-btn-0').classList.toggle('active', v === 0);
+  document.getElementById('wkt-btn-5').classList.toggle('active', v === 5);
 }
 
 function renderPlayerInputs() {
@@ -1147,7 +1163,7 @@ function selectDismissal(how) {
   const cur = G.cur;
 
   cur.wickets++;
-  cur.runs -= 5;
+  cur.runs -= G.wicketPenalty;
   const bfKey = cur.facingIdx === 0 ? 'p1' : 'p2';
   cur.bf[bfKey]++;
   cur.ballsThisOver++;
