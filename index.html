@@ -483,7 +483,8 @@ let G = {
   pairResults: {},  // {id: {runs, wickets, bf, battingRuns:{name:runs}, done}}
 
   // Overs bowled per player (across all innings)
-  bowlerOvers: {},  // {playerName: completedOvers}
+  bowlerOvers: {},   // {playerName: completedOvers}
+  lastBowler:  {},   // {pairId: playerName} — who bowled last for each pair
 
   // Current innings live state
   cur: null,
@@ -530,6 +531,12 @@ function pairColor(id) {
 
 function snapshotCur() {
   return JSON.parse(JSON.stringify(G.cur));
+}
+
+function nextBowlerForPair(pair) {
+  const last = G.lastBowler[pair.id];
+  if (!last) return pair.p1;
+  return last === pair.p1 ? pair.p2 : pair.p1;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -742,6 +749,7 @@ function startGame() {
     G.pairResults[p.id] = { runs: 0, wickets: 0, bf: { p1: 0, p2: 0 }, battingRuns: {}, done: false };
   });
   G.bowlerOvers = {};
+  G.lastBowler  = {};
   G.currentFixture = 0;
   G.history = [];
   beginInnings(0);
@@ -763,7 +771,7 @@ function beginInnings(fixIdx) {
     over:            0,
     ballsThisOver:   0,
     facingIdx:       0,
-    bowler:          firstBowlP ? firstBowlP.p1 : '',
+    bowler:          firstBowlP ? nextBowlerForPair(firstBowlP) : '',
     runs:            0,
     wickets:         0,
     bf:              { p1: 0, p2: 0 },
@@ -849,11 +857,12 @@ function renderBatterChips() {
   const bp   = getBattingPair();
   const cur  = G.cur;
   const prev = G.pairResults[bp.id] || {};
-  // Cumulative balls faced (previous stints + current)
-  const tot1 = (prev.bf?.p1 || 0) + cur.bf.p1;
-  const tot2 = (prev.bf?.p2 || 0) + cur.bf.p2;
+  const tot1  = (prev.bf?.p1 || 0) + cur.bf.p1;
+  const tot2  = (prev.bf?.p2 || 0) + cur.bf.p2;
+  const runs1 = (prev.battingRuns?.[bp.p1] || 0) + cur.runsScored.p1;
+  const runs2 = (prev.battingRuns?.[bp.p2] || 0) + cur.runsScored.p2;
   const f = document.getElementById('bf-row');
-  function chip(idx, name, tot, bf) {
+  function chip(idx, name, runs, tot) {
     const isFacing  = cur.facingIdx === idx;
     const overLimit = tot > 6;
     let cls = 'bf-chip';
@@ -861,13 +870,14 @@ function renderBatterChips() {
     if (overLimit) cls += ' bf-warn';
     const warnNote = overLimit ? `<div style="font-size:10px;font-weight:700;color:var(--orange)">⚠ ${tot} balls</div>` : '';
     return `<div class="${cls}">
-      <div class="bf-num">${bf}</div>
+      <div class="bf-num">${runs}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:1px">${tot} ball${tot !== 1 ? 's' : ''}</div>
       <div class="bf-name">${name}</div>
       <div class="bf-tag">${isFacing ? '▶ STRIKER' : ''}</div>
       ${warnNote}
     </div>`;
   }
-  f.innerHTML = chip(0, bp.p1, tot1, cur.bf.p1) + chip(1, bp.p2, tot2, cur.bf.p2);
+  f.innerHTML = chip(0, bp.p1, runs1, tot1) + chip(1, bp.p2, runs2, tot2);
 }
 
 function populateFacingDropdown() {
@@ -1024,7 +1034,7 @@ function renderBowlingOvers() {
 // SCORING ACTIONS
 // ──────────────────────────────────────────────────────────────────────────────
 function scoreRun(runs) {
-  G.history.push({ cur: snapshotCur(), bowlerOvers: {...G.bowlerOvers} });
+  G.history.push({ cur: snapshotCur(), bowlerOvers: {...G.bowlerOvers}, lastBowler: {...G.lastBowler} });
   const cur = G.cur;
 
   cur.runs += runs;
@@ -1071,7 +1081,7 @@ function extraDecision(rebowl) {
   document.getElementById('modal-extra').classList.add('hidden');
   if (!pendingExtra) return;
 
-  G.history.push({ cur: snapshotCur(), bowlerOvers: {...G.bowlerOvers} });
+  G.history.push({ cur: snapshotCur(), bowlerOvers: {...G.bowlerOvers}, lastBowler: {...G.lastBowler} });
   const cur = G.cur;
   const type = pendingExtra.type;
   pendingExtra = null;
@@ -1102,7 +1112,7 @@ function byePick(runs) {
   document.getElementById('modal-bye').classList.add('hidden');
   if (!pendingBye) return;
 
-  G.history.push({ cur: snapshotCur(), bowlerOvers: {...G.bowlerOvers} });
+  G.history.push({ cur: snapshotCur(), bowlerOvers: {...G.bowlerOvers}, lastBowler: {...G.lastBowler} });
   const cur = G.cur;
   const type = pendingBye.type;
   pendingBye = null;
@@ -1133,7 +1143,7 @@ function openWktModal() {
 
 function selectDismissal(how) {
   document.getElementById('modal-wkt').classList.add('hidden');
-  G.history.push({ cur: snapshotCur(), bowlerOvers: {...G.bowlerOvers} });
+  G.history.push({ cur: snapshotCur(), bowlerOvers: {...G.bowlerOvers}, lastBowler: {...G.lastBowler} });
   const cur = G.cur;
 
   cur.wickets++;
@@ -1156,6 +1166,7 @@ function undoLast() {
   const snap = G.history.pop();
   G.cur = snap.cur;
   G.bowlerOvers = snap.bowlerOvers;
+  G.lastBowler  = snap.lastBowler;
   renderScoringUI();
   syncFacingDropdown();
   updateBowlerBtn();
@@ -1169,6 +1180,7 @@ function checkOverEnd() {
   if (cur.ballsThisOver >= 6) {
     if (!cur.isUnderarmPhase && cur.bowler) {
       G.bowlerOvers[cur.bowler] = (G.bowlerOvers[cur.bowler] || 0) + 1;
+      G.lastBowler[cur.bowlingPairId] = cur.bowler;
     }
     cur.over++;
     cur.ballsThisOver = 0;
@@ -1185,11 +1197,11 @@ function checkOverEnd() {
       }
 
       if (newSchedIdx !== cur.scheduleIdx) {
-        // Bowling pair switches per schedule
+        // Bowling pair switches per schedule — start with whoever hasn't bowled yet for that pair
         cur.scheduleIdx = newSchedIdx;
         cur.bowlingPairId = cur.bowlingSchedule[newSchedIdx].bowlingId;
         const newBowlP = pairById(cur.bowlingPairId);
-        if (newBowlP) cur.bowler = newBowlP.p1;
+        if (newBowlP) cur.bowler = nextBowlerForPair(newBowlP);
       } else {
         // Same pair — alternate between the two players
         const bowlP = getBowlingPair();
