@@ -474,8 +474,8 @@ let G = {
   ],
   pairs: [],    // [{id, name, p1, p2, overs}]  overs=null means use default
 
-  // Fixtures — each may have its own overs count for split-bowling innings
-  fixtures: [],        // [{battingId, bowlingId, overs}]
+  // Fixtures — each pair bats once; bowling pair may change mid-innings
+  fixtures: [],        // [{battingId, bowlingSchedule:[{bowlingId, overs},...]}]
   currentFixture: 0,
   _fixtureKey: null,   // tracks which pair config the fixtures were generated for
 
@@ -665,31 +665,21 @@ function goToFixtures() {
   const key = G.pairs.map(p => p.id).join(',');
   if (G._fixtureKey !== key) {
     G._fixtureKey = key;
-    // Generate default fixtures
     if (G.pairs.length === 6 && G.defaultOvers === 3) {
-      // Tournament schedule: split bowling across pairs
-      // IDs: 0=Superchargers,1=Thunderbolts,2=Sixers,3=Rockets,4=Renegades,5=Mavericks
+      // Tournament: each pair bats one continuous innings; bowling pair changes mid-innings
       const [A,B,C,D,E,F] = G.pairs.map(p => p.id);
       G.fixtures = [
-        {battingId:A, bowlingId:B, overs:2},
-        {battingId:A, bowlingId:D, overs:1},
-        {battingId:C, bowlingId:D, overs:1},
-        {battingId:C, bowlingId:A, overs:2},
-        {battingId:D, bowlingId:C, overs:2},
-        {battingId:D, bowlingId:B, overs:1},
-        {battingId:E, bowlingId:B, overs:1},
-        {battingId:E, bowlingId:F, overs:2},
-        {battingId:F, bowlingId:E, overs:2},
-        {battingId:F, bowlingId:A, overs:1},
-        {battingId:B, bowlingId:A, overs:1},
-        {battingId:B, bowlingId:C, overs:2},
+        { battingId:A, bowlingSchedule:[{bowlingId:B,overs:2},{bowlingId:D,overs:1}] },
+        { battingId:C, bowlingSchedule:[{bowlingId:D,overs:1},{bowlingId:A,overs:2}] },
+        { battingId:D, bowlingSchedule:[{bowlingId:C,overs:2},{bowlingId:B,overs:1}] },
+        { battingId:E, bowlingSchedule:[{bowlingId:B,overs:1},{bowlingId:F,overs:2}] },
+        { battingId:F, bowlingSchedule:[{bowlingId:E,overs:2},{bowlingId:A,overs:1}] },
+        { battingId:B, bowlingSchedule:[{bowlingId:A,overs:1},{bowlingId:C,overs:2}] },
       ];
     } else {
-      // Simple: one fixture per batting pair
       G.fixtures = G.pairs.map((p, i) => ({
         battingId: p.id,
-        bowlingId: G.pairs[(i + 1) % G.pairs.length].id,
-        overs: null,
+        bowlingSchedule: [{ bowlingId: G.pairs[(i+1) % G.pairs.length].id, overs: G.defaultOvers }],
       }));
     }
   }
@@ -700,30 +690,44 @@ function goToFixtures() {
 function renderFixtures() {
   const list = document.getElementById('fixtures-list');
   list.innerHTML = '';
-  G.fixtures.forEach((fix, idx) => {
-    const batIdx  = G.pairs.findIndex(p => p.id === fix.battingId);
-    const grp     = pairGroupStyle(batIdx);
+  G.fixtures.forEach((fix, fixIdx) => {
+    const batIdx = G.pairs.findIndex(p => p.id === fix.battingId);
+    const grp    = pairGroupStyle(batIdx);
+    const bp     = pairById(fix.battingId);
+    const totalOv = fix.bowlingSchedule.reduce((s, e) => s + e.overs, 0);
+
     const div = document.createElement('div');
-    div.style.cssText = `padding:8px 10px;border-radius:var(--rs);border-left:4px solid ${grp.border};background:${grp.bg};margin-bottom:6px`;
-    div.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px">
-        <div style="font-size:12px;font-weight:700;color:${grp.text};width:28px;flex-shrink:0">#${idx+1}</div>
-        <div style="flex:1">
-          <div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:2px">BATTING</div>
-          <select class="sel" style="font-size:13px;padding:6px 6px" onchange="G.fixtures[${idx}].battingId=parseInt(this.value)">${pairOpts(fix.battingId)}</select>
-        </div>
-        <div style="color:var(--muted);font-weight:700;font-size:13px;flex-shrink:0">vs</div>
-        <div style="flex:1">
-          <div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:2px">BOWLING</div>
-          <select class="sel" style="font-size:13px;padding:6px 6px" onchange="G.fixtures[${idx}].bowlingId=parseInt(this.value)">${pairOpts(fix.bowlingId)}</select>
-        </div>
-        <div style="flex-shrink:0;text-align:center">
-          <div style="font-size:10px;color:var(--muted);font-weight:700;margin-bottom:2px">OV</div>
-          <input type="number" min="1" max="20" style="width:42px;padding:6px 4px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;text-align:center;background:var(--card)"
-            value="${fix.overs ?? G.defaultOvers}" onchange="G.fixtures[${idx}].overs=parseInt(this.value)||G.defaultOvers">
-        </div>
-      </div>
+    div.style.cssText = `padding:10px 12px;border-radius:var(--rs);border-left:4px solid ${grp.border};background:${grp.bg};margin-bottom:8px`;
+
+    // Batting pair header
+    const hdr = document.createElement('div');
+    hdr.style.cssText = `display:flex;align-items:center;gap:8px;margin-bottom:8px`;
+    hdr.innerHTML = `
+      <div style="font-size:12px;font-weight:700;color:${grp.text};width:24px">#${fixIdx+1}</div>
+      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-right:4px">Batting:</div>
+      <select class="sel" style="flex:1;font-size:13px;padding:6px" onchange="G.fixtures[${fixIdx}].battingId=parseInt(this.value);renderFixtures()">${pairOpts(fix.battingId)}</select>
+      <div style="font-size:12px;font-weight:700;color:var(--muted)">${totalOv} ov</div>
     `;
+    div.appendChild(hdr);
+
+    // Bowling schedule segments
+    const sched = document.createElement('div');
+    sched.style.cssText = 'display:flex;flex-direction:column;gap:4px';
+    fix.bowlingSchedule.forEach((seg, segIdx) => {
+      const segDiv = document.createElement('div');
+      segDiv.style.cssText = 'display:flex;align-items:center;gap:6px';
+      segDiv.innerHTML = `
+        <div style="font-size:11px;color:var(--muted);font-weight:700;width:46px;flex-shrink:0">${segIdx===0?'Bowl 1:':'Then:'}</div>
+        <select class="sel" style="flex:1;font-size:13px;padding:6px"
+          onchange="G.fixtures[${fixIdx}].bowlingSchedule[${segIdx}].bowlingId=parseInt(this.value)">${pairOpts(seg.bowlingId)}</select>
+        <input type="number" min="1" max="20" style="width:44px;padding:6px 4px;border:1px solid var(--border);border-radius:var(--rs);font-size:13px;text-align:center;background:var(--card)"
+          value="${seg.overs}"
+          onchange="G.fixtures[${fixIdx}].bowlingSchedule[${segIdx}].overs=parseInt(this.value)||1;renderFixtures()">
+        <span style="font-size:11px;color:var(--muted)">ov</span>
+      `;
+      sched.appendChild(segDiv);
+    });
+    div.appendChild(sched);
     list.appendChild(div);
   });
 }
@@ -746,26 +750,28 @@ function startGame() {
 function beginInnings(fixIdx) {
   G.currentFixture = fixIdx;
   const fix = G.fixtures[fixIdx];
-  const bp = pairById(fix.battingId);
-  const bowlP = pairById(fix.bowlingId);
-  const totalOvers = fix.overs ?? bp.overs ?? G.defaultOvers;
+  const schedule = fix.bowlingSchedule;
+  const totalOvers = schedule.reduce((s, e) => s + e.overs, 0);
+  const firstBowlP = pairById(schedule[0].bowlingId);
 
   G.cur = {
-    battingPairId:  fix.battingId,
-    bowlingPairId:  fix.bowlingId,
+    battingPairId:   fix.battingId,
+    bowlingSchedule: schedule,
+    scheduleIdx:     0,
+    bowlingPairId:   schedule[0].bowlingId,
     totalOvers,
-    over:           0,
-    ballsThisOver:  0,
-    facingIdx:      0,
-    bowler:         bowlP.p1,
-    runs:           0,
-    wickets:        0,
-    bf:             { p1: 0, p2: 0 },   // balls faced this stint
-    runsScored:     { p1: 0, p2: 0 },   // bat-runs per player this stint
-    overBalls:      [],
+    over:            0,
+    ballsThisOver:   0,
+    facingIdx:       0,
+    bowler:          firstBowlP ? firstBowlP.p1 : '',
+    runs:            0,
+    wickets:         0,
+    bf:              { p1: 0, p2: 0 },
+    runsScored:      { p1: 0, p2: 0 },
+    overBalls:       [],
     pendingUnderarms: 0,
     isUnderarmPhase: false,
-    underarmsLeft:  0,
+    underarmsLeft:   0,
   };
   G.history = [];
 
@@ -1161,19 +1167,34 @@ function undoLast() {
 function checkOverEnd() {
   const cur = G.cur;
   if (cur.ballsThisOver >= 6) {
-    // Credit the bowler with one completed over (not during underarm phase)
     if (!cur.isUnderarmPhase && cur.bowler) {
       G.bowlerOvers[cur.bowler] = (G.bowlerOvers[cur.bowler] || 0) + 1;
     }
     cur.over++;
     cur.ballsThisOver = 0;
     cur.overBalls = [];
-    swapStrike();  // end of over: swap batting ends
+    swapStrike();
 
-    // Auto-switch to the other player in the bowling pair
     if (!cur.isUnderarmPhase) {
-      const bowlP = getBowlingPair();
-      if (bowlP) cur.bowler = cur.bowler === bowlP.p1 ? bowlP.p2 : bowlP.p1;
+      // Find which schedule segment the new over falls in
+      let cumOvers = 0;
+      let newSchedIdx = cur.scheduleIdx;
+      for (let i = 0; i < cur.bowlingSchedule.length; i++) {
+        cumOvers += cur.bowlingSchedule[i].overs;
+        if (cur.over < cumOvers) { newSchedIdx = i; break; }
+      }
+
+      if (newSchedIdx !== cur.scheduleIdx) {
+        // Bowling pair switches per schedule
+        cur.scheduleIdx = newSchedIdx;
+        cur.bowlingPairId = cur.bowlingSchedule[newSchedIdx].bowlingId;
+        const newBowlP = pairById(cur.bowlingPairId);
+        if (newBowlP) cur.bowler = newBowlP.p1;
+      } else {
+        // Same pair — alternate between the two players
+        const bowlP = getBowlingPair();
+        if (bowlP) cur.bowler = cur.bowler === bowlP.p1 ? bowlP.p2 : bowlP.p1;
+      }
     }
 
     if (cur.over >= cur.totalOvers) {
